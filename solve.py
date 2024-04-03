@@ -1,18 +1,16 @@
-import hashlib
 import math
 import operator
 import os
+import time
 from functools import reduce
-from os import listdir
-from os.path import join, isfile
 import io
+import asyncio
 
 from minio import Minio
 from PIL.Image import Resampling
 from PIL import Image
 from io import BytesIO
 import base64
-import json
 
 from dotenv import load_dotenv
 
@@ -74,17 +72,18 @@ class Determinant:
         self.window_size = window_size
         self.minioClient = Minio(URL, access_key=ACCESS_KEY, secret_key=SECRET_KEY, secure=True)
         self.images = []
-        self.load_images()
         self.groups = {}
-        self.create_groups()
+        self.is_rebuild = False
 
-    def get_group(self, image):
+    async def get_group(self, image):
         diffs = [(group, image_difference(image, self.groups[group]['horizontal_image'])) for group in self.groups]
         return min(diffs, key=lambda diff: diff[-1])
 
-    def get_angle(self, image_base_64):
+    async def get_angle(self, image_base_64):
+        while self.is_rebuild:
+            await asyncio.sleep(5)
         image = Image.open(BytesIO(base64.b64decode(image_base_64)))
-        group, diff = self.get_group(image)
+        group, diff = await self.get_group(image)
         print(f"group {group}, diff {diff}")
         if diff < 40:
             image_crop = ImageCrops(image, self.levels, self.window_size)
@@ -110,7 +109,7 @@ class Determinant:
                 is_undefined_image = True
 
             if is_undefined_image:
-                image_name = f"{len(self.images) + len(undefined_images)}.png"
+                image_name = f"{len(self.images) + len(undefined_images)}.txt"
                 self.send_undefined_image(image_base_64, image_name)
         return result
 
@@ -133,20 +132,21 @@ class Determinant:
         self.minioClient.put_object(BUCKET, file_path, file_data, len(data))
 
     def load_images(self):
+        print(f"LOAD IMAGES")
         list_images_names = self.minioClient.list_objects(BUCKET, "rotate_captcha/horizontal_images/", recursive=True)
         for image_name in list_images_names:
             print(f"load {image_name}")
             response = self.minioClient.get_object(BUCKET, image_name.object_name)
             self.images.append(Image.open(BytesIO(base64.b64decode(response.data))))
 
-    def info(self):
+    async def info(self):
         return {
             "groups": len(self.groups),
             "levels": self.levels,
             "window_size": self.window_size
         }
 
-    def change_settings(self, data):
+    async def change_settings(self, data):
         if levels := data.get('levels'):
             self.levels = levels
         if window_size := data.get('window_size'):
@@ -154,11 +154,10 @@ class Determinant:
         self.rebuild()
 
     def rebuild(self):
+        self.is_rebuild = True
         self.images = []
         self.load_images()
         self.groups = {}
         self.create_groups()
+        self.is_rebuild = False
 
-det = Determinant()
-
-print(det.get_angle(base_64))
