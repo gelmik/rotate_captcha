@@ -15,6 +15,7 @@ async def root(data=Body()):
     image = data.get('base64')
     curt = time.time()
     solve_data = await solver.get_angle(image)
+    solve_data.update(await solver.info())
     endt = time.time()
     print(endt - curt)
     return solve_data
